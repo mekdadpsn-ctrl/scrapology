@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Scrapology output
+scrapology-out/
+*.raw.html
+*.raw.xml
+*.raw.xhtml
+*.raw.pdf
+*.rendered.html
+*.main.md
+*.structured.json
+sources.jsonl
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

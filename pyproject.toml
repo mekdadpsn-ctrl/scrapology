@@ -1,0 +1,75 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "scrapology"
+dynamic = ["version"]
+description = "Fetch web pages, open-access papers and EU law the polite way, with a receipt for every page."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Mostafa Mekdad" }]
+keywords = ["scraping", "research", "provenance", "robots.txt", "europe-pmc", "eur-lex", "playwright", "trafilatura"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Text Processing :: Markup :: HTML",
+    "Typing :: Typed",
+]
+dependencies = [
+    "playwright>=1.49",
+    "trafilatura>=2.0",
+    "lxml>=5",
+]
+
+[project.optional-dependencies]
+structured = ["extruct>=0.18"]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.urls]
+Homepage = "https://github.com/mekdadpsn-ctrl/scrapology"
+Repository = "https://github.com/mekdadpsn-ctrl/scrapology"
+Issues = "https://github.com/mekdadpsn-ctrl/scrapology/issues"
+Changelog = "https://github.com/mekdadpsn-ctrl/scrapology/blob/main/CHANGELOG.md"
+
+[project.scripts]
+scrapology = "scrapology.cli:main"
+
+[tool.hatch.version]
+path = "src/scrapology/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/scrapology"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/scrapology", "tests", "README.md", "LICENSE", "CHANGELOG.md", "pyproject.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not live'"
+markers = [
+    "live: tests that reach the public internet or need a real browser (deselected by default; run with -m live)",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["scrapology", "conftest"]
