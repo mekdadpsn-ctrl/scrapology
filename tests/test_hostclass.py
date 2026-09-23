@@ -1,11 +1,10 @@
 """Offline unit tests for the network classifier: no socket, no browser, no local server, except the
 two tests that deliberately monkeypatch `socket.getaddrinfo` to prove the resolver path."""
 
+import ipaddress
 import socket
 
 import pytest
-
-import ipaddress
 
 from scrapology import hostclass
 from scrapology.hostclass import (
