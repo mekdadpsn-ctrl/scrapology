@@ -5,6 +5,8 @@ import socket
 
 import pytest
 
+import ipaddress
+
 from scrapology import hostclass
 from scrapology.hostclass import (
     LINK_LOCAL,
@@ -16,6 +18,7 @@ from scrapology.hostclass import (
     CachedClassifier,
     classify_address,
     classify_host,
+    embedded_ipv4,
     may_reach,
 )
 
@@ -40,6 +43,17 @@ ADDRESS_CASES = [
     ("8.8.8.8", PUBLIC),
     ("2606:4700::1111", PUBLIC),
     ("::ffff:10.0.0.1", PRIVATE),
+    # round 7: IPv6 forms that embed an IPv4 address take the stricter of the two classes.
+    ("::127.0.0.1", LOOPBACK),  # IPv4-compatible
+    ("::ffff:0:127.0.0.1", LOOPBACK),  # IPv4-translated
+    ("64:ff9b::7f00:1", LOOPBACK),  # NAT64 well-known
+    ("64:ff9b::10.0.0.1", PRIVATE),  # NAT64 well-known
+    ("64:ff9b::8.8.8.8", PUBLIC),  # NAT64 well-known, to a public address
+    ("64:ff9b:1::a00:1", PRIVATE),  # NAT64 local-use
+    ("::ffff:169.254.169.254", LINK_LOCAL),  # IPv4-mapped
+    ("::ffff:0:169.254.169.254", LINK_LOCAL),  # IPv4-translated
+    ("2002:0a00:0001::1", PRIVATE),  # 6to4
+    ("::ffff:8.8.8.8", PUBLIC),  # IPv4-mapped, to a public address
 ]
 
 
@@ -51,6 +65,35 @@ def test_classify_address(address: str, expected: str) -> None:
 @pytest.mark.parametrize("address, expected", ADDRESS_CASES)
 def test_classify_host_on_an_ip_literal(address: str, expected: str) -> None:
     assert classify_host(address) == expected
+
+
+EMBEDDED_IPV4_CASES = [
+    ("::ffff:8.8.8.8", [ipaddress.IPv4Address("8.8.8.8")]),  # ipv4_mapped (::ffff:0:0/96)
+    ("::127.0.0.1", [ipaddress.IPv4Address("127.0.0.1")]),  # IPv4-compatible (::/96, deprecated)
+    ("::ffff:0:127.0.0.1", [ipaddress.IPv4Address("127.0.0.1")]),  # IPv4-translated (::ffff:0:0:0/96)
+    ("64:ff9b::7f00:1", [ipaddress.IPv4Address("127.0.0.1")]),  # NAT64 well-known (64:ff9b::/96)
+    ("64:ff9b:1::a00:1", [ipaddress.IPv4Address("10.0.0.1")]),  # NAT64 local-use (64:ff9b:1::/48)
+    ("2002:0a00:0001::1", [ipaddress.IPv4Address("10.0.0.1")]),  # 6to4 (2002::/16)
+]
+
+
+@pytest.mark.parametrize("address, expected", EMBEDDED_IPV4_CASES)
+def test_embedded_ipv4_on_each_form(address: str, expected: list) -> None:
+    assert embedded_ipv4(ipaddress.IPv6Address(address)) == expected
+
+
+def test_embedded_ipv4_teredo_yields_server_and_client() -> None:
+    # RFC 4380's own worked example: server 65.54.227.120, client 192.0.2.45 (obfuscated in the address).
+    address = ipaddress.IPv6Address("2001:0:4136:e378:8000:63bf:3fff:fdd2")
+    assert embedded_ipv4(address) == [ipaddress.IPv4Address("65.54.227.120"), ipaddress.IPv4Address("192.0.2.45")]
+
+
+def test_embedded_ipv4_unspecified_and_loopback_yield_nothing() -> None:
+    # :: and ::1 fall inside the IPv4-compatible bit pattern but carry their own meaning (unspecified,
+    # loopback); they never reach embedded_ipv4 through classify_address either, which returns for
+    # both before the IPv6 branch is reached.
+    assert embedded_ipv4(ipaddress.IPv6Address("::")) == []
+    assert embedded_ipv4(ipaddress.IPv6Address("::1")) == []
 
 
 def test_classify_address_rejects_a_name() -> None:

@@ -15,7 +15,8 @@ Fetch outcomes, following the RFC's guidance:
 - 429, 5xx or a network error: the host cannot state its rules, so it is treated as disallowed for this run.
 - Crawl-delay for our agent (or `*`) raises the per-host delay, capped at 60 seconds.
 
-robots.txt governs web resources: pages, PDFs and landing pages a browser or a plain GET would read.
+robots.txt governs every web resource this tool requests: pages, PDFs and landing pages a plain GET would read, and
+every request a rendered page makes (subresources, page-driven navigations and every redirect hop).
 The documented REST APIs this tool calls (Europe PMC, CELLAR, Unpaywall) are used under their own terms.
 """
 

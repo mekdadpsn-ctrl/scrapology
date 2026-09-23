@@ -17,9 +17,11 @@ First release.
   workers blocked; every request of every frame and page, navigation or subresource, on any host,
   is checked against robots.txt and the http/https rule before it is sent, redirect hops included
   (the interceptor fetches the hops itself), and the browser's cross-origin protections are
-  preserved: cross-origin fetch, XHR and EventSource calls, non-GET page requests and
-  private-network requests from public pages are refused; a refusal after the page has loaded keeps
-  the page and reports a warning listing the refused URLs by reason; popups are never followed;
+  preserved: every cross-origin request in CORS mode (fetch, XHR, EventSource, module scripts,
+  fonts, preloads, `crossorigin` resources), CORS-mode requests from opaque origins, non-GET page
+  requests and private-network requests from public pages (IPv4-embedding IPv6 forms included) are
+  refused; a refusal after the page has loaded keeps the page and reports a warning listing the
+  refused URLs by reason; popups are never followed;
   WebSockets are refused.
 - Official routes: Europe PMC full text for PMC ids and PubMed Central URLs; Europe PMC and
   Unpaywall for DOIs (Wiley and doi.org URLs included); EU CELLAR for CELEX numbers, EUR-Lex

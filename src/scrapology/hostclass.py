@@ -9,6 +9,9 @@ network and the public internet.
 Resolution uses `socket.getaddrinfo` and is cached per host for one render. A DNS rebinding race
 remains possible between this check and the browser's own connection: a name that resolves to a
 public address here can be re-pointed at a private one before the browser connects.
+
+IPv6 addresses that embed an IPv4 address (mapped, compatible, translated, NAT64, 6to4, Teredo)
+take the stricter of their own class and the embedded address's class.
 """
 
 import ipaddress
@@ -24,7 +27,40 @@ UNRESOLVABLE = "unresolvable"
 
 _CGNAT = ipaddress.ip_network("100.64.0.0/10")
 
+# The four forms whose embedded IPv4 address sits in the low 32 bits. IPv4-compatible and
+# IPv4-translated are distinct from ipaddress's own `ipv4_mapped` prefix (::ffff:0:0/96); NAT64
+# well-known and local-use are distinct from each other and from the two above.
+_COMPAT = ipaddress.ip_network("::/96")
+_TRANSLATED = ipaddress.ip_network("::ffff:0:0:0/96")
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
+_NAT64_LOCAL = ipaddress.ip_network("64:ff9b:1::/48")
+_UNSPECIFIED_V6 = ipaddress.IPv6Address("::")
+_LOOPBACK_V6 = ipaddress.IPv6Address("::1")
+
 Classifier = Callable[[str], str]
+
+
+def embedded_ipv4(ip: ipaddress.IPv6Address) -> list[ipaddress.IPv4Address]:
+    """Every IPv4 address `ip` embeds: mapped, IPv4-compatible, IPv4-translated, NAT64 (well-known
+    and local-use), 6to4, and Teredo's server and client. Empty when it embeds none. `::` and `::1`
+    fall inside the IPv4-compatible prefix by bit pattern alone but carry their own meaning
+    (unspecified, loopback), so they are excluded here, not only in `classify_address`."""
+    found: list[ipaddress.IPv4Address] = []
+    if ip.ipv4_mapped is not None:
+        found.append(ip.ipv4_mapped)
+    if ip in _COMPAT and ip not in (_UNSPECIFIED_V6, _LOOPBACK_V6):
+        found.append(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF))
+    if ip in _TRANSLATED:
+        found.append(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF))
+    if ip in _NAT64:
+        found.append(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF))
+    if ip in _NAT64_LOCAL:
+        found.append(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF))
+    if ip.sixtofour is not None:
+        found.append(ip.sixtofour)
+    if ip.teredo is not None:
+        found.extend(ip.teredo)  # (server, client)
+    return found
 
 
 def classify_address(address: str) -> str:
@@ -38,8 +74,12 @@ def classify_address(address: str) -> str:
         return LINK_LOCAL
     if isinstance(ip, ipaddress.IPv4Address) and ip in _CGNAT:
         return PRIVATE
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        return classify_address(str(ip.ipv4_mapped))
+    if isinstance(ip, ipaddress.IPv6Address):
+        # `is_private` counts 6to4 (2002::/16) and Teredo (2001::/32) as private, so those forms are refused even
+        # when the address they embed is public. Both mechanisms are deprecated and the direction is the safe one.
+        own = PRIVATE if ip.is_private else PUBLIC
+        classes = {own} | {classify_address(str(embedded)) for embedded in embedded_ipv4(ip)}
+        return _strictest(classes)
     if ip.is_private:  # RFC 1918, unique-local IPv6 (fc00::/7) and the other reserved ranges
         return PRIVATE
     return PUBLIC

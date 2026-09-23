@@ -228,6 +228,70 @@ class _Server:
                     self._send(200, b"allowed text", "text/plain")
                 elif path == "/pic":
                     self._send(200, b"\x89PNG-fake-pic", "image/png")
+                elif path == "/module.js":
+                    body = b"document.body.insertAdjacentHTML('beforeend', '<p>MODULE-RAN</p>');"
+                    self._send(200, body, "application/javascript")
+                elif path == "/module-x.js":
+                    body = b"document.body.insertAdjacentHTML('beforeend', '<p>MODULE-X-RAN</p>');"
+                    self._send(200, body, "application/javascript")
+                elif path == "/font.woff2":
+                    self._send(200, b"\x00\x01\x00\x00fake-woff2-font", "font/woff2")
+                elif path == "/preload.json":
+                    self._send(200, b'{"secret":"PRELOAD-BODY"}', "application/json")
+                elif path == "/sandbox-frame":
+                    body = (
+                        b"<html><body><script>fetch('/frame-data').then(function(r){return r.text();})"
+                        b".then(function(t){parent.postMessage(t, '*');});</script></body></html>"
+                    )
+                    self._send(200, body)
+                elif path == "/frame-data":
+                    self._send(200, b"FRAME-DATA-BODY", "text/plain")
+                elif path == "/module-same":
+                    tag = b'<script type="module" src="/module.js"></script>'
+                    self._send(200, ARTICLE_HTML.encode() + tag)
+                elif path == "/module-cross" and owner.peer is not None:
+                    tag = ('<script type="module" src="' + owner.peer.origin + '/module-x.js"></script>').encode()
+                    self._send(200, ARTICLE_HTML.encode() + tag)
+                elif path == "/font-same":
+                    tag = b"<style>@font-face{font-family:F;src:url('/font.woff2')} body{font-family:F}</style>"
+                    self._send(200, ARTICLE_HTML.encode() + tag)
+                elif path == "/font-cross" and owner.peer is not None:
+                    tag = (
+                        "<style>@font-face{font-family:F;src:url('"
+                        + owner.peer.origin
+                        + "/font.woff2')} body{font-family:F}</style>"
+                    ).encode()
+                    self._send(200, ARTICLE_HTML.encode() + tag)
+                elif path == "/preload-same":
+                    tag = b'<link rel="preload" as="fetch" href="/preload.json">'
+                    self._send(200, ARTICLE_HTML.encode() + tag)
+                elif path == "/preload-cross" and owner.peer is not None:
+                    tag = (
+                        '<link rel="preload" as="fetch" href="' + owner.peer.origin + '/preload.json" crossorigin>'
+                    ).encode()
+                    self._send(200, ARTICLE_HTML.encode() + tag)
+                elif path == "/img-crossorigin" and owner.peer is not None:
+                    tag = ('<img src="' + owner.peer.origin + '/pic" crossorigin="anonymous">').encode()
+                    self._send(200, ARTICLE_HTML.encode() + tag)
+                elif path == "/script-crossorigin" and owner.peer is not None:
+                    tag = (
+                        '<script src="' + owner.peer.origin + '/allowed.js" crossorigin="anonymous"></script>'
+                    ).encode()
+                    self._send(200, ARTICLE_HTML.encode() + tag)
+                elif path == "/sandboxed-fetch":
+                    body = (
+                        b'<iframe sandbox="allow-scripts" src="/sandbox-frame"></iframe>'
+                        b"<script>window.addEventListener('message', function(e){"
+                        b"document.body.insertAdjacentHTML('beforeend', '<p>' + e.data + '</p>');});</script>"
+                    )
+                    self._send(200, ARTICLE_HTML.encode() + body)
+                elif path == "/plain-frame-fetch":
+                    body = (
+                        b'<iframe src="/sandbox-frame"></iframe>'
+                        b"<script>window.addEventListener('message', function(e){"
+                        b"document.body.insertAdjacentHTML('beforeend', '<p>' + e.data + '</p>');});</script>"
+                    )
+                    self._send(200, ARTICLE_HTML.encode() + body)
                 else:
                     self._send(404, b"<html><body>gone</body></html>")
 
@@ -682,3 +746,112 @@ def test_browser_form_get_auto_submit_to_an_allowed_page_navigates(servers, tmp_
     assert result.outcome == "fetched", result.note
     assert result.final_url == f"{a.origin}/ok?q=1"
     assert "/ok?q=1" in a.requests
+
+
+# ---------- round 7: module scripts, fonts and preloads are cors-mode too; a sandboxed frame's origin is opaque
+
+
+@pytest.mark.live
+def test_browser_same_origin_module_script_still_loads(servers, tmp_path) -> None:
+    a, _ = servers
+    result = _browser_fetch(a, "/module-same", tmp_path)
+    assert result.outcome == "fetched", result.note
+    assert "/module.js" in a.requests
+    assert "MODULE-RAN" in _rendered(result)
+    assert result.warning is None
+
+
+@pytest.mark.live
+def test_browser_cross_origin_module_script_is_refused(servers, tmp_path) -> None:
+    a, b = servers
+    result = _browser_fetch(a, "/module-cross", tmp_path)
+    assert result.outcome == "fetched", result.note
+    assert "/module-x.js" not in b.requests, b.requests
+    assert "MODULE-X-RAN" not in _rendered(result)
+    assert result.warning and "cross-origin script request" in result.warning
+    assert f"{b.origin}/module-x.js" in result.warning
+
+
+@pytest.mark.live
+def test_browser_same_origin_font_still_loads(servers, tmp_path) -> None:
+    a, _ = servers
+    result = _browser_fetch(a, "/font-same", tmp_path)
+    assert result.outcome == "fetched", result.note
+    assert "/font.woff2" in a.requests
+    assert result.warning is None
+
+
+@pytest.mark.live
+def test_browser_cross_origin_font_is_refused(servers, tmp_path) -> None:
+    a, b = servers
+    result = _browser_fetch(a, "/font-cross", tmp_path)
+    assert result.outcome == "fetched", result.note
+    assert "/font.woff2" not in b.requests, b.requests
+    assert result.warning and f"{b.origin}/font.woff2" in result.warning
+
+
+@pytest.mark.live
+def test_browser_same_origin_preload_fetch_still_loads(servers, tmp_path) -> None:
+    a, _ = servers
+    result = _browser_fetch(a, "/preload-same", tmp_path)
+    assert result.outcome == "fetched", result.note
+    assert "/preload.json" in a.requests
+    assert result.warning is None
+
+
+@pytest.mark.live
+def test_browser_cross_origin_preload_fetch_is_refused(servers, tmp_path) -> None:
+    a, b = servers
+    result = _browser_fetch(a, "/preload-cross", tmp_path)
+    assert result.outcome == "fetched", result.note
+    assert "/preload.json" not in b.requests, b.requests
+    assert result.warning and f"{b.origin}/preload.json" in result.warning
+    assert "PRELOAD-BODY" not in _rendered(result)
+
+
+@pytest.mark.live
+def test_browser_img_with_crossorigin_attribute_is_refused(servers, tmp_path) -> None:
+    """Unlike the plain `/ximg` case (round 6, no `crossorigin` attribute, no-cors, still loads), an
+    <img> the page marks `crossorigin` is a cors-mode request and is refused like any other."""
+    a, b = servers
+    result = _browser_fetch(a, "/img-crossorigin", tmp_path)
+    assert result.outcome == "fetched", result.note
+    assert "/pic" not in b.requests, b.requests
+    assert result.warning and f"{b.origin}/pic" in result.warning
+
+
+@pytest.mark.live
+def test_browser_script_with_crossorigin_attribute_is_refused(servers, tmp_path) -> None:
+    """Unlike the plain `/xscript` case (round 6, no `crossorigin` attribute, still loads), a classic
+    <script> the page marks `crossorigin` is a cors-mode request and is refused like any other."""
+    a, b = servers
+    result = _browser_fetch(a, "/script-crossorigin", tmp_path)
+    assert result.outcome == "fetched", result.note
+    assert "/allowed.js" not in b.requests, b.requests
+    assert result.warning and f"{b.origin}/allowed.js" in result.warning
+
+
+@pytest.mark.live
+def test_browser_sandboxed_frame_fetch_is_refused_as_opaque_origin(servers, tmp_path) -> None:
+    a, _ = servers
+    result = _browser_fetch(a, "/sandboxed-fetch", tmp_path)
+    assert result.outcome == "fetched", result.note
+    assert "/frame-data" not in a.requests, a.requests
+    assert "FRAME-DATA-BODY" not in _rendered(result)
+    # the rendered warning names the group and the URL, same as every other refusal reason; the
+    # "opaque origin" wording lives in cross_origin_refusal's own detail string, which the warning
+    # never surfaces (no reason's detail does), and is asserted directly in test_browser_rules.py.
+    assert result.warning and "cross-origin script request" in result.warning
+    assert f"{a.origin}/frame-data" in result.warning
+
+
+@pytest.mark.live
+def test_browser_plain_frame_fetch_still_works(servers, tmp_path) -> None:
+    """Control for the case above: the same same-origin fetch, from an iframe without `sandbox`, whose
+    origin is the page's own and is not refused."""
+    a, _ = servers
+    result = _browser_fetch(a, "/plain-frame-fetch", tmp_path)
+    assert result.outcome == "fetched", result.note
+    assert "/frame-data" in a.requests
+    assert "FRAME-DATA-BODY" in _rendered(result)
+    assert result.warning is None

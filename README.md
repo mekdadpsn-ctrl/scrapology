@@ -19,11 +19,15 @@ It exists for research work where the source list matters as much as the text.
   popups) and every request a rendered page makes (scripts, styles, images, XHR and fetch calls,
   prefetch links, beacons, on any host, redirects included) is checked, not only the first URL.
   WebSockets are refused.
-- Bypass the browser's cross-origin protections. Cross-origin fetch, XHR and EventSource calls,
-  non-GET requests made by pages (POST fetch, beacons, form POST auto-submits) and requests from
-  public pages to private, loopback, link-local or unspecified addresses are refused. Pages that
-  depend on cross-origin API calls may render incompletely; that is the price of not bypassing
-  those protections.
+- Bypass the browser's cross-origin protections. Every cross-origin request a page makes in CORS
+  mode (fetch, XHR and EventSource calls, module scripts, web fonts, preloads and any resource
+  requested with the `crossorigin` attribute), every request from an opaque origin (a sandboxed
+  frame), non-GET requests made by pages (POST fetch, beacons, form POST auto-submits) and requests
+  from public pages to private, loopback, link-local or unspecified addresses are refused. A
+  cross-origin `fetch(..., {mode: "no-cors"})` is refused too, which is stricter than a browser: a
+  browser sends it and hands the page a response it cannot read. Pages that depend on cross-origin
+  API calls, module scripts or web fonts may render incompletely or with system fonts; that is the
+  price of not bypassing those protections.
 - Retry a refusal. A 401, 403, 429 or 503, or a challenge page, ends the fetch. It is never retried
   with a browser, another User-Agent, another address or a second request.
 - Hide what it is. Every request carries `Scrapology/<version> (+repository URL)`, and the browser
@@ -124,15 +128,18 @@ pages, PDFs, Unpaywall landing pages, and every redirect, navigation or subresou
    navigation, an iframe, a popup) leaves the loaded page in place: it is kept, and the refused URL
    is reported as a warning. Popups are never followed. Every other request the page makes (scripts,
    styles, images, XHR and fetch calls, prefetch links, beacons, on any host) passes four checks
-   before it is sent: only GET and HEAD; cross-origin fetch, XHR and EventSource calls are refused
-   (same-origin ones and plain images, scripts and stylesheets are not); from a page on a public
-   address, no request may reach a private, loopback, link-local or unspecified address; then that
-   host's robots.txt and the http/https rule. Every redirect hop of such a request passes the same
-   checks (the interceptor fetches the hops itself and hands the browser the final response). A
-   refused request is aborted and listed in the warning by reason, so nothing a page may not have
-   can reach `.rendered.html`. WebSockets are closed without connecting and listed in the warning. The final
-   URL is checked again after load. Later navigations are throttled, each URL once; subresources are
-   not throttled. A short static page is not rendered: it is fetched as is with a warning.
+   before it is sent: only GET and HEAD; cross-origin requests in CORS mode are refused, which the
+   browser marks with an Origin header (fetch, XHR and EventSource calls, module scripts, web fonts,
+   preloads, anything with the `crossorigin` attribute), and so are CORS-mode requests from a
+   sandboxed frame (same-origin ones and plain images, classic scripts and stylesheets are not);
+   from a page on a public address, no request may reach a private, loopback, link-local or
+   unspecified address; then that host's robots.txt and the http/https rule. Every redirect hop of
+   such a request passes the same checks (the interceptor fetches the hops itself and hands the
+   browser the final response). A refused request is aborted and listed in the warning by reason,
+   so nothing a page may not have can reach `.rendered.html`. WebSockets are closed without
+   connecting and listed in the warning. The final URL is checked again after load. Later
+   navigations are throttled, each URL once; subresources are not throttled. A short static page is
+   not rendered: it is fetched as is with a warning.
 5. trafilatura extracts the main text as markdown.
 
 One retry on a network error or on a 5xx other than 503, never on a 4xx. Bodies over `--max-bytes`
@@ -223,15 +230,15 @@ hello = "my_package.cli:register"
 
 Plugins are loaded when the CLI starts; one that fails to import or register (whatever it raises)
 prints a single warning line and the built-in commands keep working. A handler returns an int exit
-code or None (taken as 0); one that raises ends with exit code 1 and one line on stderr. `scrapology doctor` lists what loaded. A plugin that
-fetches something should write the same receipt as the built-in routes with
+code or None (taken as 0); one that raises ends with exit code 1 and one line on stderr.
+`scrapology doctor` lists what loaded. A plugin that fetches something should write the same
+receipt as the built-in routes with
 `scrapology.record(out_dir, target=..., url=..., route=..., outcome=..., files={...}, ...)`, which
 appends one line to `sources.jsonl` with the standard fields and computes `sha256_raw` and
 `sha256_rendered` from the `raw` and `rendered` entries of `files` (which must exist); it validates
 the name, refuses `extra` keys that collide with standard fields and refuses file paths outside
-`out_dir`. Plugins are
-ordinary installed packages that run with your rights and are bound by the same principles as the
-tool itself; the maintainers do not review or endorse them.
+`out_dir`. Plugins are ordinary installed packages that run with your rights and are bound by the
+same principles as the tool itself; the maintainers do not review or endorse them.
 
 ## Responsible use
 
@@ -249,7 +256,10 @@ Unpaywall, as its API requires, and never reaches an output file, a receipt or a
   may be PDF only).
 - Europe PMC returns only what is open access.
 - A rendered page is a snapshot of a DOM, not the bytes the server sent; `.rendered.html` says so.
-- Pages that depend on cross-origin API calls (fetch, XHR) render without them.
+- Pages that depend on cross-origin API calls (fetch, XHR), cross-origin module scripts or web
+  fonts render without them; fonts fall back to the system's.
+- The private-network rule resolves a host once per render, and the browser connects on its own
+  afterwards, so a name re-pointed at a private address in between (DNS rebinding) is not caught.
 
 ## Licence
 

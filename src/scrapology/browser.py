@@ -22,11 +22,17 @@ page in the context (popups included), with service workers blocked:
   does.
 - Allowed subresources are fetched by this handler, not by the browser, and the response is replayed
   to it, which bypasses the browser's own cross-origin checks unless they are reapplied here: a
-  cross-origin `fetch`, XHR or EventSource call is refused. Playwright 1.62 exposes no
-  `sec-fetch-mode` header at route time, so the rule falls back to `resource_type in ("fetch", "xhr",
-  "eventsource")` compared against the origin of the initiating frame. A plain cross-origin image,
-  classic script, stylesheet or font, which the fallback cannot tell apart from a no-cors request, is
-  not affected by this rule; it still goes through the robots and network rules.
+  cross-origin request the page makes in CORS mode is refused. CORS mode is read from the `origin`
+  request header, which Playwright 1.62 does carry at route time for exactly those requests: `fetch`,
+  XHR and EventSource calls, module scripts, web fonts, and any resource requested with the
+  `crossorigin` attribute or as a `<link rel=preload>` with `crossorigin`. An `origin` value of `null`
+  means the request came from an opaque origin, a sandboxed frame or a `data:`/`srcdoc` document, and
+  is refused the same way. `sec-fetch-mode` is checked first for a future Playwright that exposes it;
+  `resource_type in ("fetch", "xhr", "eventsource")` is the fallback for the one case that carries
+  neither header, a same-origin `fetch`/XHR/EventSource, which still needs comparing (and passes,
+  being same-origin). A plain cross-origin image, classic script, stylesheet or same-origin preload
+  without `crossorigin`, none of which the browser sends in CORS mode, is not affected by this rule;
+  it still goes through the robots and network rules.
 - A page on a public address may not make the browser reach a loopback, private (RFC 1918), CGNAT,
   link-local (which includes cloud metadata services) or unspecified address; a page that is itself on
   such an address may reach its own class of network and the public internet. The host is classified
@@ -161,10 +167,39 @@ def origin_of(url: str) -> tuple[str, str, int] | None:
     return (scheme, host.lower(), parts.port or default_port)
 
 
-def frame_origin(frame: Any) -> tuple[str, str, int] | None:
-    """The origin of the nearest ancestor frame that has a web URL, walking `parent_frame` past
-    `about:blank` and `about:srcdoc` frames. None when no ancestor has one, or the frame tree cannot be
-    read (a popup's first navigation, for one)."""
+def frame_origin(
+    frame: Any, cache: dict[int, tuple[str, str, int] | None] | None = None
+) -> tuple[str, str, int] | None:
+    """The origin of `frame` itself when it can be read live: `window.origin`, which also catches an
+    opaque origin (a sandboxed frame without `allow-same-origin`, or a `data:`/`srcdoc` document both
+    report the literal string "null"). When the evaluation fails (the frame is navigating away, for
+    one) or returns something unreadable, falls back to the origin of the nearest ancestor frame that
+    has a web URL, walking `parent_frame` past `about:blank` and `about:srcdoc` frames. None when the
+    frame is opaque, no ancestor has a web URL, or the frame tree cannot be read (a popup's first
+    navigation, for one). `cache`, keyed by `id(frame)`, is a per-render cache the caller keeps so a
+    page making many same-origin fetches from one frame evaluates it once. Only called for the header-
+    absent fallback path, so the evaluation (a page round-trip) runs rarely."""
+    key = id(frame) if cache is not None else None
+    if key is not None and key in cache:
+        return cache[key]
+    result = _frame_origin_uncached(frame)
+    if key is not None:
+        cache[key] = result
+    return result
+
+
+def _frame_origin_uncached(frame: Any) -> tuple[str, str, int] | None:
+    try:
+        value = frame.evaluate("window.origin")
+    except Exception:
+        pass
+    else:
+        if value == "null":
+            return None  # opaque origin
+        origin = origin_of(value)
+        if origin is not None:
+            return origin
+        # an unreadable value: fall through to the URL walk below
     current = frame
     for _hop in range(20):  # a real frame tree is shallow; this only guards a broken frame chain
         if current is None:
@@ -215,6 +250,7 @@ class _Interceptor:
         self.throttled: set[str] = set()
         self.document_body: bytes | None = None  # the served body of the last main-frame document
         self.document_url: str | None = None
+        self._frame_origins: dict[int, tuple[str, str, int] | None] = {}  # frame_origin cache, per render
 
     def refusal(self, target: str, *, skip_network: bool = False) -> tuple[str, str] | None:
         """(group, detail) for a request that may not go out: the scheme allow-list, then, unless
@@ -245,20 +281,40 @@ class _Interceptor:
         return "private network", f"{target_class} address {shown} refused from a {self.page_class} page"
 
     def cross_origin_refusal(self, request: Any, target: str, frame: Any) -> tuple[str, str] | None:
-        """Refuses a cross-origin `fetch`, XHR or EventSource call. Playwright 1.62 exposes no
-        `sec-fetch-mode` header at route time; when it is absent, `resource_type` stands in for it,
-        which cannot tell a no-cors subresource (image, classic script, stylesheet, font) apart from a
-        cors-mode one, so those are left to the robots and network rules instead."""
-        mode = request.headers.get("sec-fetch-mode")
-        cors_mode = mode == "cors" or (mode is None and request.resource_type in ("fetch", "xhr", "eventsource"))
+        """Refuses a cross-origin request the page makes in CORS mode: `fetch`, XHR and EventSource
+        calls, module scripts, web fonts, and anything requested with the `crossorigin` attribute or
+        as a `<link rel=preload>` with `crossorigin`. Mode is read from the `origin` request header,
+        which Playwright 1.62 does carry at route time for exactly those requests; `sec-fetch-mode` is
+        checked first for a future Playwright that exposes it, and `resource_type` stands in only for
+        the one case that carries neither header, a same-origin `fetch`/XHR/EventSource (which still
+        needs comparing, and passes, being same-origin). An `origin` value of `null` marks a request
+        from an opaque origin, a sandboxed frame or a `data:`/`srcdoc` document, and is refused the
+        same way a real cross-origin mismatch is. A no-cors subresource (plain image, classic script,
+        stylesheet, same-origin preload without `crossorigin`) carries none of these signals and is
+        left to the robots and network rules instead."""
+        mode_header = request.headers.get("sec-fetch-mode")
+        origin_header = request.headers.get("origin")
+        cors_mode = (
+            mode_header == "cors"
+            or origin_header is not None
+            or request.resource_type in ("fetch", "xhr", "eventsource")
+        )
         if not cors_mode:
             return None
         target_origin = origin_of(target)
         if target_origin is None:
             return None  # not a web URL; the scheme rule refuses it
-        if frame is None:
+        if origin_header == "null":
+            return (
+                "cross-origin script request",
+                f"{redact(target)} requested from an opaque origin (sandboxed frame or data: document)",
+            )
+        if origin_header is not None:
+            source_origin = origin_of(origin_header)  # None here means malformed: falls through to refuse below
+        elif frame is None:
             return "cross-origin script request", f"{redact(target)}: initiating frame unknown"
-        source_origin = frame_origin(frame)
+        else:
+            source_origin = frame_origin(frame, self._frame_origins)
         if source_origin is None or source_origin != target_origin:
             return "cross-origin script request", f"{redact(target)} is cross-origin from the requesting page"
         return None
